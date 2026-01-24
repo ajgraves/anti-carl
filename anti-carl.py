@@ -6,10 +6,26 @@ from discord import app_commands
 #import random
 import acconfig
 
-intents = discord.Intents.default()
-intents.message_content = True
+class AntiCarlBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix="!",
+            intents=discord.Intents.all() # Ensure message_content is enabled
+        )
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+    async def setup_hook(self):
+        # Syncing globally (Takes ~1 hour to show up)
+        await self.tree.sync()
+        
+        # SKEPTICAL TIP: For INSTANT updates during testing, 
+        # replace the line above with your specific Guild ID:
+        # my_guild = discord.Object(id=YOUR_GUILD_ID_HERE)
+        # self.tree.copy_global_to(guild=my_guild)
+        # await self.tree.sync(guild=my_guild)
+        
+        print("Slash commands synced!")
+
+bot = AntiCarlBot()
 
 CARL_BOT_ID = 235148962103951360
 
@@ -71,9 +87,6 @@ def reload_cache():
     trigger_cache = [(row[0], row[1].split(',')) for row in raw_data]
     print(f"Cache updated: {len(trigger_cache)} groups loaded.")
 
-init_db()
-reload_cache()
-
 @bot.event
 async def on_ready():
     # Set the status to "Watching Carl-bot"
@@ -84,7 +97,7 @@ async def on_ready():
     await bot.change_presence(status=discord.Status.online, activity=activity)
 
     # Syncs slash commands with Discord
-    await bot.tree.sync()
+    #await bot.tree.sync()
     print(f'Logged in as {bot.user}')
 
 @bot.listen("on_message")
@@ -205,5 +218,8 @@ async def edit_keywords(interaction: discord.Interaction, response: str, new_key
 @bot.tree.command(name="ping", description="Checks if Anti-Carl is awake")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong! I'm listening.", ephemeral=True)
+
+init_db()
+reload_cache()
 
 bot.run(acconfig.API_KEY)
