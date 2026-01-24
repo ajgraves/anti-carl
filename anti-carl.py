@@ -41,7 +41,7 @@ RESPONSE_MAP = {
 trigger_cache = []
 
 def init_db():
-    conn = sqlite3.connect('anti_carl.db')
+    conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
     # Create the table
     c.execute('''CREATE TABLE IF NOT EXISTS trigger_groups 
@@ -75,7 +75,7 @@ def init_db():
 def reload_cache():
     """Updates the global trigger_cache variable with the latest DB data."""
     global trigger_cache
-    conn = sqlite3.connect('anti_carl.db')
+    conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
     c.execute("SELECT response, keywords FROM trigger_groups")
     # We store it as a list of tuples: [("🙂", ["good", "great"]), ...]
@@ -138,7 +138,7 @@ async def set_response(interaction: discord.Interaction, keywords: str, response
     clean_keywords = keywords.lower().replace(" ", "")
     
     # 2. Write to Database
-    conn = sqlite3.connect('anti_carl.db')
+    conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO trigger_groups (response, keywords) VALUES (?, ?)", 
               (response, clean_keywords))
@@ -171,7 +171,7 @@ async def list_triggers(interaction: discord.Interaction):
 @app_commands.describe(response="The exact response/emoji you want to remove")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def remove_response(interaction: discord.Interaction, response: str):
-    conn = sqlite3.connect('anti_carl.db')
+    conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
     
     # Check if it exists first
@@ -196,7 +196,7 @@ async def edit_keywords(interaction: discord.Interaction, response: str, new_key
     # Clean the input
     clean_keywords = ",".join([k.strip().lower() for k in new_keywords.split(',')])
     
-    conn = sqlite3.connect('anti_carl.db')
+    conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
     
     # Verify the response exists before updating
