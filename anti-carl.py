@@ -17,7 +17,7 @@ RESPONSE_MAP = {
     "bad": "Fuck carl!",
     "carl": "Don't ever say that name around me. :rage:",
     "listen": "I always listen!",
-    "cottage": "I'm coming to the cottage",
+    "cottage": "I'm coming to the cottage ||What even does this mean?||",
     "love": "Don't insult me! ||But I love you too bb!||"
 }
 
@@ -55,7 +55,7 @@ async def anti_carl_reply(message):
                 await message.reply(response)
                 return
 
-        await message.reply("You rang? (x_x)")
+        await message.reply("You rang? :eyes:")
 
 # Implemented ping/pong to test if bot is alive during debugging
 @bot.tree.command(name="ping", description="Checks if Anti-Carl is awake")
