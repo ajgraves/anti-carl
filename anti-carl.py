@@ -32,20 +32,23 @@ RESPONSE_MAP = {
     "good": ":smile:",
     "bad": "Fuck carl!",
     "carl": "Don't ever say that name around me. :rage:",
-    "listen": "I always listen!",
+    "listen": "I always listen! :innocent:",
     "cottage": "I'm coming to the cottage ||What even does this mean?||",
     "love": "Don't insult me! ||But I love you too bb!||"
 }
 
 # --- Database Setup ---
-trigger_cache = []
+trigger_cache = []  # list of (id, response, [keywords])
 
 def init_db():
     conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
-    # Create the table
+    
+    # Updated schema with proper primary key
     c.execute('''CREATE TABLE IF NOT EXISTS trigger_groups 
-                 (response TEXT PRIMARY KEY, keywords TEXT)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  response TEXT NOT NULL,
+                  keywords TEXT NOT NULL UNIQUE)''')
     
     # Check if any data exists
     c.execute("SELECT COUNT(*) FROM trigger_groups")
@@ -60,12 +63,13 @@ def init_db():
                 flipped_map[response] = []
             flipped_map[response].append(keyword)
 
-        # 2. Insert into database
         for response, keywords_list in flipped_map.items():
-            # Join ["good", "great"] into "good,great"
             keyword_string = ",".join(keywords_list)
-            c.execute("INSERT INTO trigger_groups (response, keywords) VALUES (?, ?)", 
-                      (response, keyword_string))
+            try:
+                c.execute("INSERT INTO trigger_groups (response, keywords) VALUES (?, ?)", 
+                          (response, keyword_string))
+            except sqlite3.IntegrityError:
+                print(f"Skipped duplicate keywords during init: {keyword_string}")
         
         conn.commit()
         print("Database pre-populated successfully!")
@@ -77,13 +81,12 @@ def reload_cache():
     global trigger_cache
     conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
-    c.execute("SELECT response, keywords FROM trigger_groups")
-    # We store it as a list of tuples: [("🙂", ["good", "great"]), ...]
+    c.execute("SELECT id, response, keywords FROM trigger_groups ORDER BY id")
     raw_data = c.fetchall()
     conn.close()
     
-    # Pre-process the strings into lists now so we don't have to do it every message
-    trigger_cache = [(row[0], row[1].split(',')) for row in raw_data]
+    # Now includes id: [(id, "🙂", ["good", "great"]), ...]
+    trigger_cache = [(row[0], row[1], row[2].split(',')) for row in raw_data]
     print(f"Cache updated: {len(trigger_cache)} groups loaded.")
 
 @bot.event
@@ -92,11 +95,8 @@ async def on_ready():
     # Options: discord.ActivityType.watching, .listening, .playing, .competing
     activity = discord.Activity(type=discord.ActivityType.watching, name="Carl-bot")
     
-    # You can also set the 'Status' (Online, Idle, DND, Invisible)
     await bot.change_presence(status=discord.Status.online, activity=activity)
 
-    # Syncs slash commands with Discord
-    #await bot.tree.sync()
     print(f'Logged in as {bot.user}')
 
 @bot.listen("on_message")
@@ -107,7 +107,7 @@ async def anti_carl_reply(message):
     # 1. Reply to Carl-bot
     if message.author.id == CARL_BOT_ID:
         await message.reply("ya mom's a hoe")
-        return # Added return to stop processing if it's Carl
+        return
 
     # 2. Modular logic - Check conditions separately
     is_reply_to_me = False
@@ -115,40 +115,74 @@ async def anti_carl_reply(message):
         if message.reference.resolved.author.id == bot.user.id:
             is_reply_to_me = True
 
-    # This was previously indented too far!
     is_mentioned = bot.user.mentioned_in(message)
 
-    # Now this runs if it's a reply OR a mention
     if is_reply_to_me or is_mentioned:
         content_lower = message.content.lower()
         
-        # Check against the fast memory cache
-        for response_text, keyword_list in trigger_cache:
-            if any(k in content_lower for k in keyword_list):
+        for _, response_text, keyword_list in trigger_cache:
+            if any(k.strip() in content_lower for k in keyword_list):
                 await message.reply(response_text)
                 return
         
-        # Fallback if no keywords matched
+        # Fallback
         await message.reply("You rang? :eyes:")
 
-@bot.tree.command(name="set_response", description="Set multiple keywords for one response")
+# ────────────────────────────────────────────────
+#   Autocomplete helper for selecting a trigger group
+# ────────────────────────────────────────────────
+async def trigger_response_autocomplete(interaction: discord.Interaction, current: str):
+    # Return list of current responses for selection
+    choices = [
+        app_commands.Choice(name=f"{resp} ({', '.join(kws[:3])}{'...' if len(kws)>3 else ''})", value=str(tid))
+        for tid, resp, kws in trigger_cache
+        if current.lower() in resp.lower() or any(current.lower() in k.lower() for k in kws)
+    ][:25]  # Discord limit
+    return choices
+
+# ────────────────────────────────────────────────
+#   Improved: /set_response now prevents keyword overlap
+# ────────────────────────────────────────────────
+@bot.tree.command(name="set_response", description="Add or update a response with keywords (keywords must be unique)")
 @app_commands.checks.has_permissions(moderate_members=True)
+@app_commands.describe(
+    keywords="Comma-separated keywords (no spaces)",
+    response="The reply/emote the bot should send"
+)
 async def set_response(interaction: discord.Interaction, keywords: str, response: str):
-    # 1. Clean up keywords (lowercase and remove spaces)
-    clean_keywords = keywords.lower().replace(" ", "")
-    
-    # 2. Write to Database
+    clean_keywords = ",".join(k.strip().lower() for k in keywords.split(',') if k.strip())
+    if not clean_keywords:
+        await interaction.response.send_message("No valid keywords provided.", ephemeral=True)
+        return
+
     conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO trigger_groups (response, keywords) VALUES (?, ?)", 
-              (response, clean_keywords))
-    conn.commit()
+
+    # Check if any of these keywords already exist
+    placeholders = ",".join("?" for _ in clean_keywords.split(","))
+    c.execute(f"SELECT keywords FROM trigger_groups WHERE keywords IN ({placeholders})", 
+              clean_keywords.split(","))
+    conflicts = c.fetchall()
+
+    if conflicts:
+        conflict_list = ", ".join(row[0] for row in conflicts)
+        await interaction.response.send_message(
+            f"Cannot add: these keywords already exist in another group:\n`{conflict_list}`\n"
+            "Remove or edit the existing group first.", ephemeral=True)
+        conn.close()
+        return
+
+    # Insert or replace (but since keywords are unique, REPLACE would fail → we use INSERT)
+    try:
+        c.execute("INSERT INTO trigger_groups (response, keywords) VALUES (?, ?)", 
+                  (response, clean_keywords))
+        conn.commit()
+        await interaction.response.send_message(f"Added: `{clean_keywords}` → `{response}`", ephemeral=True)
+    except sqlite3.IntegrityError:
+        await interaction.response.send_message("Error: keywords already exist (race condition?). Try again.", ephemeral=True)
+    
     conn.close()
-    
-    # 3. CRITICAL: Refresh the memory cache immediately
     reload_cache()
-    
-    await interaction.response.send_message(f"Updated cache! `{keywords}` -> `{response}`", ephemeral=True)
 
 @bot.tree.command(name="list_triggers", description="Show all active keyword groups")
 @app_commands.checks.has_permissions(moderate_members=True)
@@ -159,59 +193,122 @@ async def list_triggers(interaction: discord.Interaction):
 
     embed = discord.Embed(title="🐢 Anti-Carl Trigger List", color=discord.Color.blue())
     
-    for response, keywords in trigger_cache:
-        # Join keywords back into a string for display
+    for tid, response, keywords in trigger_cache:
         keyword_str = ", ".join(keywords)
-        embed.add_field(name=f"Response: {response}", value=f"Keywords: `{keyword_str}`", inline=False)
+        embed.add_field(
+            name=f"ID {tid} | Response: {response}",
+            value=f"Keywords: `{keyword_str}`",
+            inline=False
+        )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# --- Remove a Trigger Group ---
-@bot.tree.command(name="remove_response", description="Delete a response and all its keywords")
-@app_commands.describe(response="The exact response/emoji you want to remove")
+@bot.tree.command(name="remove_response", description="Delete a trigger group by selecting it")
+@app_commands.describe(trigger="The trigger group to remove")
+@app_commands.autocomplete(trigger=trigger_response_autocomplete)
 @app_commands.checks.has_permissions(moderate_members=True)
-async def remove_response(interaction: discord.Interaction, response: str):
-    conn = sqlite3.connect('anti-carl.db')
-    c = conn.cursor()
-    
-    # Check if it exists first
-    c.execute("SELECT 1 FROM trigger_groups WHERE response = ?", (response,))
-    if not c.fetchone():
-        conn.close()
-        await interaction.response.send_message(f"Could not find a trigger with the response: `{response}`", ephemeral=True)
+async def remove_response(interaction: discord.Interaction, trigger: str):
+    try:
+        trigger_id = int(trigger)
+    except ValueError:
+        await interaction.response.send_message("Invalid selection.", ephemeral=True)
         return
 
-    c.execute("DELETE FROM trigger_groups WHERE response = ?", (response,))
-    conn.commit()
-    conn.close()
-    
-    reload_cache()
-    await interaction.response.send_message(f"Successfully removed the `{response}` trigger group.", ephemeral=True)
-
-# --- Edit Keywords for an Existing Response ---
-@bot.tree.command(name="edit_keywords", description="Update the keywords for an existing response")
-@app_commands.describe(response="The response to edit", new_keywords="The new comma-separated list of words")
-@app_commands.checks.has_permissions(moderate_members=True)
-async def edit_keywords(interaction: discord.Interaction, response: str, new_keywords: str):
-    # Clean the input
-    clean_keywords = ",".join([k.strip().lower() for k in new_keywords.split(',')])
-    
     conn = sqlite3.connect('anti-carl.db')
     c = conn.cursor()
+    c.execute("DELETE FROM trigger_groups WHERE id = ?", (trigger_id,))
+    if c.rowcount == 0:
+        await interaction.response.send_message(f"No trigger with ID {trigger_id} found.", ephemeral=True)
+    else:
+        conn.commit()
+        await interaction.response.send_message(f"Removed trigger ID {trigger_id}.", ephemeral=True)
     
-    # Verify the response exists before updating
-    c.execute("SELECT 1 FROM trigger_groups WHERE response = ?", (response,))
-    if not c.fetchone():
-        conn.close()
-        await interaction.response.send_message(f"The response `{response}` doesn't exist yet. Use `/set_response` to create it.", ephemeral=True)
+    conn.close()
+    reload_cache()
+
+@bot.tree.command(name="edit_trigger", description="Edit response and/or keywords of an existing trigger")
+@app_commands.describe(
+    trigger="Select the trigger group to edit",
+    new_response="New response text (leave empty to keep current)",
+    new_keywords="New comma-separated keywords (leave empty to keep current)"
+)
+@app_commands.autocomplete(trigger=trigger_response_autocomplete)
+@app_commands.checks.has_permissions(moderate_members=True)
+async def edit_trigger(
+    interaction: discord.Interaction,
+    trigger: str,
+    new_response: str = None,
+    new_keywords: str = None
+):
+    try:
+        trigger_id = int(trigger)
+    except ValueError:
+        await interaction.response.send_message("Invalid trigger selection.", ephemeral=True)
         return
 
-    c.execute("UPDATE trigger_groups SET keywords = ? WHERE response = ?", (clean_keywords, response))
+    # Get current values
+    conn = sqlite3.connect('anti-carl.db')
+    c = conn.cursor()
+    c.execute("SELECT response, keywords FROM trigger_groups WHERE id = ?", (trigger_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        await interaction.response.send_message(f"Trigger ID {trigger_id} not found.", ephemeral=True)
+        return
+
+    current_response, current_keywords_str = row
+    current_keywords = current_keywords_str.split(',')
+
+    # Prepare updates
+    updates = []
+    params = []
+
+    if new_response is not None and new_response.strip():
+        updates.append("response = ?")
+        params.append(new_response.strip())
+
+    if new_keywords is not None and new_keywords.strip():
+        clean_new = ",".join(k.strip().lower() for k in new_keywords.split(',') if k.strip())
+        if not clean_new:
+            conn.close()
+            await interaction.response.send_message("No valid keywords provided.", ephemeral=True)
+            return
+
+        # Check for conflicts with **other** groups
+        c.execute("SELECT id FROM trigger_groups WHERE keywords = ? AND id != ?", (clean_new, trigger_id))
+        if c.fetchone():
+            conn.close()
+            await interaction.response.send_message(
+                f"Cannot update: these keywords are already used by another group.", ephemeral=True)
+            return
+
+        updates.append("keywords = ?")
+        params.append(clean_new)
+
+    if not updates:
+        conn.close()
+        await interaction.response.send_message("No changes provided.", ephemeral=True)
+        return
+
+    # Apply update
+    query = f"UPDATE trigger_groups SET {', '.join(updates)} WHERE id = ?"
+    params.append(trigger_id)
+    c.execute(query, params)
     conn.commit()
     conn.close()
-    
+
     reload_cache()
-    await interaction.response.send_message(f"Keywords updated for `{response}`: `{clean_keywords}`", ephemeral=True)
+
+    changes = []
+    if new_response and new_response.strip():
+        changes.append(f"response → `{new_response}`")
+    if new_keywords and new_keywords.strip():
+        changes.append(f"keywords → `{clean_new}`")
+
+    await interaction.response.send_message(
+        f"Updated trigger ID {trigger_id}:\n" + "\n".join(changes),
+        ephemeral=True
+    )
 
 # Implemented ping/pong to test if bot is alive during debugging
 @bot.tree.command(name="ping", description="Checks if Anti-Carl is awake")
