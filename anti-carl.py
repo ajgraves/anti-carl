@@ -8,21 +8,20 @@ import acconfig
 
 class AntiCarlBot(commands.Bot):
     def __init__(self):
+        # 1. Setup the intents object first
+        my_intents = discord.Intents.default()
+        my_intents.message_content = True
+        my_intents.members = True
+        my_intents.presences = True
+
+        # 2. Pass that object into the parent class
         super().__init__(
             command_prefix="!",
-            intents=discord.Intents.all() # Ensure message_content is enabled
+            intents=my_intents
         )
 
     async def setup_hook(self):
-        # Syncing globally (Takes ~1 hour to show up)
         await self.tree.sync()
-        
-        # SKEPTICAL TIP: For INSTANT updates during testing, 
-        # replace the line above with your specific Guild ID:
-        # my_guild = discord.Object(id=YOUR_GUILD_ID_HERE)
-        # self.tree.copy_global_to(guild=my_guild)
-        # await self.tree.sync(guild=my_guild)
-        
         print("Slash commands synced!")
 
 bot = AntiCarlBot()
