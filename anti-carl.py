@@ -126,7 +126,7 @@ async def anti_carl_reply(message):
                 return
         
         # Fallback
-        await message.reply("You rang? :eyes:")
+        await message.reply("¯\_(ツ)_/¯")
 
 # ────────────────────────────────────────────────
 #   Autocomplete helper for selecting a trigger group
