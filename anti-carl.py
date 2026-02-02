@@ -118,6 +118,10 @@ async def anti_carl_reply(message):
     is_mentioned = bot.user.mentioned_in(message)
 
     if is_reply_to_me or is_mentioned:
+        # If we're tagged in @everyone, ignore that
+        if message.mention_everyone:
+            return
+
         content_lower = message.content.lower()
         
         for _, response_text, keyword_list in trigger_cache:
