@@ -125,10 +125,10 @@ async def get_ai_response(user_message: str) -> str | None:
         return ai_text if ai_text else None
 
     except requests.exceptions.RequestException as e:
-        print(f"[Ollama fallback] connection failed: {type(e).__name__} - {e}")
+        #print(f"[Ollama fallback] connection failed: {type(e).__name__} - {e}")
         return None
     except Exception as e:
-        print(f"[Ollama fallback] unexpected error: {type(e).__name__} - {e}")
+        #print(f"[Ollama fallback] unexpected error: {type(e).__name__} - {e}")
         return None
 
 @bot.event
