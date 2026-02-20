@@ -103,7 +103,7 @@ async def get_ai_response(user_message: str) -> str | None:
             ],
             "stream": False,                         # we want full response at once
             "options": {                             # optional tuning — feel free to tweak or remove
-                "temperature": 0.9,
+                "temperature": acconfig.OLLAMA_TEMPERATURE, #0.9,
                 "top_p": 0.95
             }
         }
