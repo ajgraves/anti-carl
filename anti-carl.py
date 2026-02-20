@@ -4,6 +4,9 @@ from discord.ext import commands
 from discord import app_commands
 #import asyncio
 #import random
+import requests
+import json
+import asyncio
 import acconfig
 
 class AntiCarlBot(commands.Bot):
@@ -89,6 +92,45 @@ def reload_cache():
     trigger_cache = [(row[0], row[1], row[2].split(',')) for row in raw_data]
     print(f"Cache updated: {len(trigger_cache)} groups loaded.")
 
+async def get_ai_response(user_message: str) -> str | None:
+    """Returns AI reply or None if Ollama is unreachable (silent fail)."""
+    try:
+        payload = {
+            "model": acconfig.OLLAMA_MODEL,          # "gpt-oss:20b"
+            "messages": [
+                {"role": "system", "content": acconfig.SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ],
+            "stream": False,                         # we want full response at once
+            "options": {                             # optional tuning — feel free to tweak or remove
+                "temperature": 0.9,
+                "top_p": 0.95
+            }
+        }
+
+        # Run the blocking requests call in a thread so it doesn't freeze the bot
+        response = await asyncio.to_thread(
+            requests.post,
+            f"{acconfig.OLLAMA_HOST}/api/chat",
+            json=payload,
+            timeout=120                              # generous timeout — 20B model can be a bit slow on laptop
+        )
+
+        response.raise_for_status()                  # raise if 4xx/5xx
+
+        # Ollama /api/chat returns JSON with "message" → "content"
+        result = response.json()
+        ai_text = result.get("message", {}).get("content", "").strip()
+
+        return ai_text if ai_text else None
+
+    except requests.exceptions.RequestException as e:
+        print(f"[Ollama fallback] connection failed: {type(e).__name__} - {e}")
+        return None
+    except Exception as e:
+        print(f"[Ollama fallback] unexpected error: {type(e).__name__} - {e}")
+        return None
+
 @bot.event
 async def on_ready():
     # Set the status to "Watching Carl-bot"
@@ -130,7 +172,13 @@ async def anti_carl_reply(message):
                 return
         
         # Fallback
-        await message.reply("¯\_(ツ)_/¯")
+        #await message.reply("¯\_(ツ)_/¯")
+        # AI fallback — only triggered on mention/reply-to-me with no keyword match
+        # If Ollama is unreachable → silently do nothing (exactly as you requested)
+        ai_reply = await get_ai_response(message.content)
+        if ai_reply:
+            await message.reply(ai_reply)
+        # else: nothing — completely silent
 
 # ────────────────────────────────────────────────
 #   Autocomplete helper for selecting a trigger group
