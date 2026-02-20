@@ -164,6 +164,11 @@ async def anti_carl_reply(message):
         if message.mention_everyone:
             return
 
+        ai_reply = await get_ai_response(message.content)
+        if ai_reply:
+            await message.reply(ai_reply)
+            return
+
         content_lower = message.content.lower()
         
         for _, response_text, keyword_list in trigger_cache:
@@ -175,9 +180,9 @@ async def anti_carl_reply(message):
         #await message.reply("¯\_(ツ)_/¯")
         # AI fallback — only triggered on mention/reply-to-me with no keyword match
         # If Ollama is unreachable → silently do nothing (exactly as you requested)
-        ai_reply = await get_ai_response(message.content)
-        if ai_reply:
-            await message.reply(ai_reply)
+        #ai_reply = await get_ai_response(message.content)
+        #if ai_reply:
+        #    await message.reply(ai_reply)
         # else: nothing — completely silent
 
 # ────────────────────────────────────────────────
