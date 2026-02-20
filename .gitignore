@@ -1,2 +1,4 @@
 acconfig.py
 .DS_Store
+__pycache__
+anti-carl.db
