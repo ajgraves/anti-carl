@@ -164,7 +164,11 @@ async def anti_carl_reply(message):
         if message.mention_everyone:
             return
 
-        ai_reply = await get_ai_response(message.content)
+        clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
+        if not clean_content:
+            clean_content = message.content
+
+        ai_reply = await get_ai_response(clean_content)
         if ai_reply:
             await message.reply(ai_reply)
             return
