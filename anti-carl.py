@@ -7,6 +7,7 @@ from discord import app_commands
 import requests
 import json
 import asyncio
+from collections import defaultdict, deque
 import acconfig
 
 class AntiCarlBot(commands.Bot):
@@ -39,6 +40,9 @@ RESPONSE_MAP = {
     "cottage": "I'm coming to the cottage ||What even does this mean?||",
     "love": "Don't insult me! ||But I love you too bb!||"
 }
+
+# Per-user conversation history: user_id → deque of message dicts (max 20 messages total = ~10 turns)
+conversation_history = defaultdict(lambda: deque(maxlen=20))
 
 # --- Database Setup ---
 trigger_cache = []  # list of (id, response, [keywords])
@@ -92,44 +96,55 @@ def reload_cache():
     trigger_cache = [(row[0], row[1], row[2].split(',')) for row in raw_data]
     print(f"Cache updated: {len(trigger_cache)} groups loaded.")
 
-async def get_ai_response(user_message: str) -> str | None:
-    """Returns AI reply or None if Ollama is unreachable (silent fail)."""
+async def get_ai_response(user_message: str, user_id: int) -> str | None:
+    """Attempts AI reply with per-user history; returns None silently on failure."""
     try:
+        # Load this user's recent history (deque of {"role": ..., "content": ...})
+        messages = list(conversation_history[user_id])
+
+        # Add the current user message
+        messages.append({"role": "user", "content": user_message})
+
         payload = {
-            "model": acconfig.OLLAMA_MODEL,          # "gpt-oss:20b"
+            "model": acconfig.OLLAMA_MODEL,
             "messages": [
                 {"role": "system", "content": acconfig.SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
+                *messages   # ← includes history + current user message
             ],
-            "stream": False,                         # we want full response at once
-            "options": {                             # optional tuning — feel free to tweak or remove
+            "stream": False,
+            "options": {
                 "temperature": acconfig.OLLAMA_TEMPERATURE, #0.9,
                 "top_p": acconfig.OLLAMA_TOPP, #0.95
                 "top_k": acconfig.OLLAMA_TOPK
+                # Optional: force larger context if Ollama defaults too low
+                # "num_ctx": 8192   # ← uncomment if you notice truncation
             }
         }
 
-        # Run the blocking requests call in a thread so it doesn't freeze the bot
         response = await asyncio.to_thread(
             requests.post,
             f"{acconfig.OLLAMA_HOST}/api/chat",
             json=payload,
-            timeout=120                              # generous timeout — 20B model can be a bit slow on laptop
+            timeout=120
         )
-
-        response.raise_for_status()                  # raise if 4xx/5xx
-
-        # Ollama /api/chat returns JSON with "message" → "content"
+        response.raise_for_status()
         result = response.json()
         ai_text = result.get("message", {}).get("content", "").strip()
 
-        return ai_text if ai_text else None
+        if ai_text:
+            # Append both to history for next time
+            conversation_history[user_id].append({"role": "user", "content": user_message})
+            conversation_history[user_id].append({"role": "assistant", "content": ai_text})
+            return ai_text
 
-    except requests.exceptions.RequestException as e:
-        #print(f"[Ollama fallback] connection failed: {type(e).__name__} - {e}")
+        return None  # empty response → treat as failure
+
+    except requests.exceptions.RequestException:
+        # Ollama unreachable/offline → silent drop (no log spam, as configured earlier)
         return None
     except Exception as e:
-        #print(f"[Ollama fallback] unexpected error: {type(e).__name__} - {e}")
+        # Unexpected error → log quietly, but still silent to user
+        print(f"[Ollama fallback] unexpected error for user {user_id}: {type(e).__name__} - {e}")
         return None
 
 @bot.event
@@ -169,7 +184,7 @@ async def anti_carl_reply(message):
         if not clean_content:
             clean_content = message.content
 
-        ai_reply = await get_ai_response(clean_content)
+        ai_reply = await get_ai_response(clean_content, message.channel.id)  # use message.author.id for per-user history
         if ai_reply:
             await message.reply(ai_reply)
             return
